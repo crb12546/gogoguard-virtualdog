@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🐕 虚拟狗控制台</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --line:#283039; --txt:#e6edf3; --mut:#8b949e; --grn:#2ea043; --red:#da3633; --blu:#1f6feb; --amb:#d29922; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 -apple-system,"PingFang SC",Segoe UI,sans-serif; }
+  .wrap { max-width:920px; margin:0 auto; padding:18px; }
+  h1 { font-size:18px; margin:0; display:flex; align-items:center; gap:10px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--mut); display:inline-block; }
+  .dot.on { background:var(--grn); box-shadow:0 0 8px var(--grn); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-top:14px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  label { color:var(--mut); font-size:12px; }
+  input[type=text],input[type=password] { background:#0d1117; border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:7px 9px; font-size:13px; }
+  input.url { flex:1; min-width:200px; }
+  button { background:#21262d; border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
+  button:hover { border-color:#3d444d; }
+  button.primary { background:var(--blu); border-color:var(--blu); }
+  button.go { background:var(--grn); border-color:var(--grn); }
+  button.warn { background:var(--red); border-color:var(--red); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .kv { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px dashed var(--line); }
+  .kv:last-child { border:0; }
+  .kv b { font-weight:600; }
+  .badge { padding:2px 9px; border-radius:999px; font-size:12px; }
+  .b-run { background:rgba(46,160,67,.18); color:#3fb950; }
+  .b-idle { background:rgba(139,148,158,.18); color:var(--mut); }
+  .b-pause { background:rgba(210,153,34,.18); color:var(--amb); }
+  .pts { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .pt { font-size:12px; padding:5px 9px; border:1px solid var(--line); border-radius:999px; cursor:pointer; user-select:none; }
+  .pt.haz { background:rgba(218,54,51,.18); border-color:var(--red); color:#ff7b72; }
+  .sec-t { color:var(--mut); font-size:12px; margin:0 0 8px; }
+  #log { background:#0a0d11; border:1px solid var(--line); border-radius:8px; padding:10px; height:170px; overflow:auto; font:12px/1.6 ui-monospace,Menlo,monospace; color:#c9d1d9; white-space:pre-wrap; }
+  .muted { color:var(--mut); }
+  .err { color:#ff7b72; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🐕 虚拟狗控制台 <span id="dot" class="dot"></span> <span id="connTxt" class="muted" style="font-size:12px">未连接</span></h1>
+
+  <!-- 连接 -->
+  <div class="card">
+    <div class="row">
+      <label>平台</label><input id="backend" class="url" type="text" placeholder="http://localhost:8000" />
+      <label>robotId</label><input id="robotId" type="text" placeholder="go2-tju-01" style="width:130px" />
+      <label>令牌</label><input id="token" type="password" placeholder="dev-..." style="width:160px" />
+      <button class="primary" onclick="connect()">连接</button>
+    </div>
+    <div id="connErr" class="err"></div>
+  </div>
+
+  <div class="grid">
+    <!-- 状态 -->
+    <div class="card">
+      <p class="sec-t">状态</p>
+      <div class="kv"><span class="muted">状态</span><span id="st" class="badge b-idle">—</span></div>
+      <div class="kv"><span class="muted">位置</span><b id="pose">—</b></div>
+      <div class="kv"><span class="muted">最近点位</span><b id="cur">—</b></div>
+      <div class="kv"><span class="muted">路线</span><b id="route">—</b></div>
+      <div class="kv"><span class="muted">电量</span><b>— <span class="muted">(GO2 无)</span></b></div>
+    </div>
+    <!-- 走路控制 -->
+    <div class="card">
+      <p class="sec-t">巡检控制</p>
+      <div class="row">
+        <button class="go" onclick="patrol('start')">▶ 开始巡检</button>
+        <button onclick="patrol('pause')">⏸ 暂停/继续</button>
+        <button onclick="patrol('stop')">⏹ 回待命</button>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label>速度</label>
+        <input id="speed" type="range" min="0.2" max="2" step="0.1" value="0.7" oninput="setSpeed(this.value)" style="flex:1" />
+        <b id="speedV">0.7</b><span class="muted">m/s</span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label>素材</label>
+        <button id="matBtn" onclick="toggleMat()">◉ 真图</button>
+        <span class="muted" style="font-size:12px">真图→平台真判定；纯色→只测链路</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 注入突发 -->
+  <div class="card">
+    <p class="sec-t">💥 注入突发（点一下，平台大屏秒弹红警）</p>
+    <div class="row">
+      <button class="warn" onclick="incident('person_down')">🆘 人倒地</button>
+      <button class="warn" onclick="incident('fire')">🔥 起火</button>
+      <button class="warn" onclick="incident('flooding')">🌊 积水</button>
+      <span class="muted" style="font-size:12px">落在狗当前位置</span>
+    </div>
+  </div>
+
+  <!-- 设隐患点 -->
+  <div class="card">
+    <p class="sec-t">⚠ 设隐患点（开=到点用 fail 图 → 平台真判不合规，合规率随手可调）</p>
+    <div id="pts" class="pts"><span class="muted">连接后显示点位</span></div>
+  </div>
+
+  <!-- 日志 -->
+  <div class="card">
+    <p class="sec-t">上报日志</p>
+    <div id="log"></div>
+  </div>
+  <p class="muted" style="font-size:12px;text-align:center;margin-top:10px">回填一周历史用 CLI：<code>scenarios/week.py</code></p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let S = {};
+
+async function post(path, body) {
+  const r = await fetch(path, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body||{}) });
+  return r.json();
+}
+async function connect() {
+  $('connErr').textContent = '';
+  const r = await post('/api/connect', { backend:$('backend').value, robotId:$('robotId').value, token:$('token').value });
+  if (!r.ok) $('connErr').textContent = r.error || '连接失败';
+}
+const patrol = a => post('/api/patrol/'+a);
+const incident = k => post('/api/incident', { kind:k });
+const setSpeed = v => { $('speedV').textContent = v; post('/api/config', { speed:parseFloat(v) }); };
+function toggleMat(){ post('/api/config', { material: !S.material }); }
+function toggleHaz(p, on){ post('/api/hazard', { point:p, on }); }
+
+function render() {
+  $('dot').className = 'dot' + (S.connected ? ' on':'');
+  $('connTxt').textContent = S.connected ? (S.backend) : '未连接';
+  const stEl = $('st'); stEl.textContent = S.status || '—';
+  stEl.className = 'badge ' + (S.status==='巡检中'?'b-run':S.status==='暂停'?'b-pause':'b-idle');
+  $('pose').textContent = S.pose ? `(${S.pose.x}, ${S.pose.y})` : '—';
+  $('cur').textContent = S.curPoint || '—';
+  $('route').textContent = S.routeFile || '—';
+  $('matBtn').textContent = S.material ? '◉ 真图' : '○ 纯色';
+  $('log').textContent = (S.log||[]).join('\n');
+  // 点位隐患开关
+  const box = $('pts');
+  if ((S.points||[]).length && box.dataset.n != S.points.length) {
+    box.dataset.n = S.points.length; box.innerHTML = '';
+    S.points.forEach(p => {
+      const el = document.createElement('span'); el.className='pt'; el.textContent=p;
+      el.onclick = () => toggleHaz(p, !(S.hazards||[]).includes(p));
+      el.dataset.p = p; box.appendChild(el);
+    });
+  }
+  [...box.children].forEach(el => { if(el.dataset) el.className = 'pt' + ((S.hazards||[]).includes(el.dataset.p)?' haz':''); });
+}
+async function poll() {
+  try { S = await (await fetch('/api/state')).json(); render(); } catch(e){}
+}
+// 预填默认值
+$('backend').value = location.origin.includes('8088') ? 'http://localhost:8000' : '';
+setInterval(poll, 1500); poll();
+</script>
+</body>
+</html>
