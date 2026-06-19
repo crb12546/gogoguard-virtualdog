@@ -39,8 +39,9 @@
         <button class="go" onclick="startWalk()">▶ 开始巡检</button>
         <button onclick="togglePause()">⏸ 暂停/继续</button>
         <button onclick="stopWalk()">⏹ 回待命</button>
-        <label>速度</label><input id="speed" type="range" min="0.3" max="2.5" step="0.1" value="0.9" style="width:120px" oninput="dog.speed=+this.value">
-        <span class="muted">摆物：在地图上点一下放</span>
+        <button id="viewBtn" onclick="toggleView()">🌐 全景</button>
+        <label>速度</label><input id="speed" type="range" min="0.3" max="2.5" step="0.1" value="0.9" style="width:110px" oninput="dog.speed=+this.value">
+        <span class="muted" id="viewhint">俯视：点地图摆物；全景：拖动转视角</span>
       </div>
       <canvas id="map"></canvas>
       <div class="pal row" style="margin-top:8px">
@@ -77,6 +78,7 @@ const log=[]; function L(m){log.unshift(new Date().toLocaleTimeString()+'  '+m);
 
 let POINTS=[], ROUTE=[], PROPS=[], seq=1, pick=null, lastSnapKey='';
 const dog={x:0,y:0,yaw:0,seg:0,segT:0,running:false,paused:false,speed:0.9,robotId:'',connected:false};
+let view='top', orbitCam=null, dragging=false, lastM={x:0,y:0}; const orbit={az:0.8,el:0.85,dist:60};
 const CAPTURE_DIST=3.4, PROP_DIST=3.0, PT={};
 
 // ---------- prop meshes (与 render.html 同款图元低模) ----------
@@ -117,6 +119,7 @@ function buildMap(){
   const W=$('map').clientWidth,H=$('map').clientHeight;mapR.setSize(W,H,false);
   const a=W/H;mapCam=new THREE.OrthographicCamera(-span/2*a,span/2*a,span/2,-span/2,1,1000);
   mapCam.position.set(cx,100,cy);mapCam.up.set(0,0,-1);mapCam.lookAt(cx,0,cy);
+  orbitCam=new THREE.PerspectiveCamera(48,a,.5,5000);orbit.dist=span*1.05;     // 3D 全景相机
   // floor
   const f=new THREE.Mesh(new THREE.PlaneGeometry(span*2,span*2),mat(0x141a22));f.rotation.x=-Math.PI/2;mapScene.add(f);
   // route line (loop)
@@ -132,12 +135,23 @@ function label(txt,x,y){const c=document.createElement('canvas');c.width=256;c.h
   const t=new THREE.CanvasTexture(c);const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:t,depthTest:false}));sp.position.set(x,1,y);sp.scale.set(PT.span*0.13,PT.span*0.033,1);return sp;}
 function renderPropMarkers(){markers.forEach(m=>mapScene.remove(m));markers=[];
   PROPS.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(.7,12,12),mat(PROP_ICON[p.type]||0xffffff,PROP_ICON[p.type]));m.position.set(p.x,.8,p.y);m.userData=p;mapScene.add(m);markers.push(m);});}
-function animate(){requestAnimationFrame(animate);if(!mapScene)return;if(dogMark){dogMark.position.set(dog.x,.6,dog.y);dogMark.rotation.z=-dog.yaw;}mapR.render(mapScene,mapCam);}
+function animate(){requestAnimationFrame(animate);if(!mapScene)return;if(dogMark){dogMark.position.set(dog.x,.6,dog.y);dogMark.rotation.z=-dog.yaw;}
+  let cam=mapCam;
+  if(view==='pano'&&orbitCam){const cx=PT.cx,cy=PT.cy,r=orbit.dist,e=orbit.el;
+    orbitCam.position.set(cx+r*Math.cos(e)*Math.sin(orbit.az),r*Math.sin(e)+3,cy+r*Math.cos(e)*Math.cos(orbit.az));orbitCam.up.set(0,1,0);orbitCam.lookAt(cx,1,cy);cam=orbitCam;}
+  mapR.render(mapScene,cam);}
 animate();
 
-// click map → world xy (raycast floor)
+// 全景轨道控制 + 切换
+window.toggleView=()=>{view=view==='top'?'pano':'top';$('viewBtn').textContent=view==='top'?'🌐 全景':'🗺️ 俯视';$('map').style.cursor=view==='top'?'crosshair':'grab';};
+$('map').addEventListener('mousedown',e=>{if(view==='pano'){dragging=true;lastM={x:e.clientX,y:e.clientY};}});
+window.addEventListener('mouseup',()=>dragging=false);
+$('map').addEventListener('mousemove',e=>{if(!dragging||view!=='pano')return;orbit.az-=(e.clientX-lastM.x)*.006;orbit.el=Math.max(.18,Math.min(1.45,orbit.el+(e.clientY-lastM.y)*.006));lastM={x:e.clientX,y:e.clientY};});
+$('map').addEventListener('wheel',e=>{if(view!=='pano')return;e.preventDefault();orbit.dist=Math.max(PT.span*.4,Math.min(PT.span*3,orbit.dist*(1+e.deltaY*.001)));},{passive:false});
+
+// click map → world xy (raycast floor)；仅俯视模式可摆物
 const ray=new THREE.Raycaster(),mouse=new THREE.Vector2();
-$('map').addEventListener('click',e=>{if(!mapCam)return;const r=$('map').getBoundingClientRect();
+$('map').addEventListener('click',e=>{if(!mapCam||view!=='top')return;const r=$('map').getBoundingClientRect();
   mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;ray.setFromCamera(mouse,mapCam);
   const hit=ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),0),new THREE.Vector3());if(!hit)return;
   if(pick==='erase'){const near=PROPS.find(p=>Math.hypot(p.x-hit.x,p.y-hit.z)<1.5);if(near){PROPS=PROPS.filter(p=>p!==near);renderPropMarkers();saveWorld();L('🧽 擦除 '+near.type);}return;}
