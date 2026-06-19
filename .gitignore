@@ -12,3 +12,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# 运行时世界状态(摆放的物件)
+world.json

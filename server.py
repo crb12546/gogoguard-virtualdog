@@ -8,6 +8,8 @@
 心跳 status 发英文串(patrolling/idle)，平台适配层 STATUS_MAP 再映射。
 """
 import os
+import base64
+import json
 import threading
 import time
 from datetime import datetime
@@ -17,6 +19,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Body
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 import go2_protocol as Pr
 from robot_sim import lib_image, lib_incident
@@ -205,6 +208,11 @@ class Dog:
                 self.addlog(f"!! 循环异常 {e}")
                 time.sleep(2)
 
+    def plan(self):
+        with self.lock:
+            return {"connected": self.connected, "robotId": self.robot_id, "routeFile": self.route_file,
+                    "points": [{"name": w[3], "x": w[0], "y": w[1], "check": w[4]} for w in self.way]}
+
     def state(self):
         with self.lock:
             return {
@@ -218,15 +226,29 @@ class Dog:
 
 dog = Dog()
 app = FastAPI(title="虚拟狗控制台")
+app.mount("/lib", StaticFiles(directory=str(WEB / "lib")), name="lib")    # three.module.js 等静态
+
+
+WORLD_FILE = Path(__file__).resolve().parent / "world.json"
 
 
 @app.on_event("startup")
 def _start():
-    threading.Thread(target=dog.run, daemon=True).start()
+    if os.getenv("DOG_AUTO") == "1":          # 无脑自走模式(用库图);默认关，由浏览器世界驱动
+        threading.Thread(target=dog.run, daemon=True).start()
 
 
 @app.get("/", response_class=HTMLResponse)
 def index():
+    for name in ("world.html", "index.html"):
+        f = WEB / name
+        if f.exists():
+            return f.read_text(encoding="utf-8")
+    return "<h1>缺 web/world.html</h1>"
+
+
+@app.get("/simple", response_class=HTMLResponse)
+def simple():
     f = WEB / "index.html"
     return f.read_text(encoding="utf-8") if f.exists() else "<h1>缺 web/index.html</h1>"
 
@@ -266,6 +288,57 @@ def api_hazard(body: dict = Body(...)):
 @app.post("/api/config")
 def api_config(body: dict = Body(...)):
     dog.set_config(speed=body.get("speed"), material=body.get("material"))
+    return {"ok": True}
+
+
+# ============ 浏览器虚拟世界驱动:狗服务当"平台桥" ============
+@app.get("/api/plan")
+def api_plan():
+    return dog.plan()
+
+
+@app.post("/api/heartbeat")
+def api_heartbeat(body: dict = Body(...)):
+    """浏览器世界:把狗当前位姿/状态转发成平台心跳(英文 status)。"""
+    if not dog.connected:
+        return {"ok": False, "error": "未连接"}
+    resp = dog._hb(body.get("x", 0), body.get("y", 0), body.get("z", 0), body.get("yaw", 0),
+                   body.get("speed", 0.6), body.get("status", "patrolling"))
+    return {"ok": True, "commands": resp.get("commands", [])}
+
+
+@app.post("/api/snap")
+def api_snap(body: dict = Body(...)):
+    """浏览器渲染的狗相机帧(png base64)→ 包成 mp4 → 经适配层传平台 → 回判定结果。"""
+    if not dog.connected:
+        return JSONResponse({"ok": False, "error": "未连接"}, status_code=400)
+    try:
+        png = base64.b64decode((body.get("png") or "").split(",")[-1])
+    except Exception:
+        return JSONResponse({"ok": False, "error": "png 解码失败"}, status_code=400)
+    point = body.get("point") or "巡逻途中"
+    dog._hb(body.get("x", 0), body.get("y", 0), body.get("z", 0), body.get("yaw", 0), body.get("speed", 0.6), "patrolling")
+    mp4 = img_to_mp4(png)
+    r = dog._video(mp4, f"{point}.mp4")
+    inc = [h.get("label") for h in (r.get("incidents") or [])]
+    matched = r.get("matchedPoint")
+    dog.addlog(f"⬆ {point} 相机帧 → 就近 {matched}{' · 突发✓ ' + ','.join(inc) if inc else ''}")
+    return {"ok": True, "matchedPoint": matched, "incidents": inc}
+
+
+@app.get("/api/world")
+def api_world_get():
+    if WORLD_FILE.exists():
+        try:
+            return json.loads(WORLD_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"props": []}
+
+
+@app.post("/api/world")
+def api_world_set(body: dict = Body(...)):
+    WORLD_FILE.write_text(json.dumps({"props": body.get("props", [])}, ensure_ascii=False), encoding="utf-8")
     return {"ok": True}
 
 
