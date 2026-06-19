@@ -203,6 +203,7 @@ async function saveWorld(){try{await J('/api/world',{props:PROPS});}catch(e){}}
 
 // 真实点云(PCD)→ 偏移到真实帧(与点位对齐:+cx,+zmin,+cy)→ 叠进犬境
 async function loadPcd(){
+  if(!mapScene){L('请先点「连接」,再看真实楼');return;}
   try{const d=await fetch('/api/pcd').then(r=>r.json());
     if(!d.hasPcd){L('该项目无点云'+(d.error?'('+d.error+')':''));return;}
     const m=d.meta, bin=atob(d.b64), u8=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
@@ -244,5 +245,17 @@ setInterval(()=>{
 },140);
 
 $('backend').value='http://localhost:8000';
+
+// 刷新后:服务端若还连着,自动把地图恢复回来(免得你重新点连接)
+(async()=>{ try{
+  const p=await fetch('/api/plan').then(r=>r.json());
+  if(p.connected && p.points && p.points.length){
+    POINTS=p.points; ROUTE=POINTS.map((_,i)=>i); dog.robotId=p.robotId; dog.connected=true;
+    dog.x=POINTS[0].x; dog.y=POINTS[0].y; dog.seg=0; dog.segT=0;
+    try{const w=await fetch('/api/world').then(r=>r.json()); PROPS=(w.props||[]).map(x=>({id:seq++,...x}));}catch(e){}
+    buildMap(); $('dot').classList.add('on'); $('conn').textContent=p.robotId+' · '+POINTS.length+'点位';
+    L('已自动恢复连接(服务端在线) · '+POINTS.length+' 点位');
+  }
+}catch(e){} })();
 </script>
 </body></html>
