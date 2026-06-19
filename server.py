@@ -75,6 +75,20 @@ class Dog:
             self.addlog(f"!! 传视频失败 {e}")
             return {}
 
+    def _video_clip(self, webm, seg):
+        """转发一段会动的视频(webm)给平台 + 段时长(segmentSeconds)+ 录制时刻(统一用服务器时钟,和心跳同钟)。
+        平台据此把帧按时间铺满整段、逐帧插值定位 —— 跟真狗"20s一段视频 + 5s一个位姿点"同逻辑。"""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            r = HTTP.post(f"{self.backend}/api/v1/robot/video/upload",
+                          files={"file": ("clip.webm", webm, "video/webm")},
+                          data={"robotId": self.robot_id, "time": ts, "fileName": "clip.webm", "fileSize": str(len(webm)),
+                                "meta": json.dumps({"recordedAt": ts, "segmentSeconds": seg})})
+            return r.json() if r.status_code == 200 else {}
+        except Exception as e:
+            self.addlog(f"!! 传视频段失败 {e}")
+            return {}
+
     def _near_name(self, x, y):
         best, bestd = "巡逻途中", 4.0
         for w in self.way:
@@ -309,21 +323,31 @@ def api_heartbeat(body: dict = Body(...)):
 
 @app.post("/api/snap")
 def api_snap(body: dict = Body(...)):
-    """浏览器渲染的狗相机帧(png base64)→ 包成 mp4 → 经适配层传平台 → 回判定结果。"""
+    """浏览器上来的狗相机内容 → 经适配层传平台 → 回判定。
+    video=一段会动的 webm(像真狗:平台逐帧插值定位 + 大屏播会动画面);png=单帧(老路,兜底)。"""
     if not dog.connected:
         return JSONResponse({"ok": False, "error": "未连接"}, status_code=400)
-    try:
+    if body.get("video"):                                # 会动的视频段(主路)
+        try:
+            webm = base64.b64decode((body.get("video") or "").split(",")[-1])
+        except Exception:
+            return JSONResponse({"ok": False, "error": "视频解码失败"}, status_code=400)
+        seg = float(body.get("segmentSeconds") or 10)
+        r = dog._video_clip(webm, seg)
+        inc = [h.get("label") for h in (r.get("incidents") or [])]
+        matched = r.get("matchedPoint")
+        dog.addlog(f"🎥 传一段 {seg:g}s 视频 → 就近 {matched}{' · 突发✓ ' + ','.join(inc) if inc else ''}")
+        return {"ok": True, "matchedPoint": matched, "incidents": inc}
+    try:                                                 # 单帧(兜底)
         png = base64.b64decode((body.get("png") or "").split(",")[-1])
     except Exception:
         return JSONResponse({"ok": False, "error": "png 解码失败"}, status_code=400)
     point = body.get("point") or "巡逻途中"
     dog._hb(body.get("x", 0), body.get("y", 0), body.get("z", 0), body.get("yaw", 0), body.get("speed", 0.6), "patrolling")
-    mp4 = img_to_mp4(png)
-    r = dog._video(mp4, f"{point}.mp4")
+    r = dog._video(img_to_mp4(png), f"{point}.mp4")
     inc = [h.get("label") for h in (r.get("incidents") or [])]
-    matched = r.get("matchedPoint")
-    dog.addlog(f"⬆ {point} 相机帧 → 就近 {matched}{' · 突发✓ ' + ','.join(inc) if inc else ''}")
-    return {"ok": True, "matchedPoint": matched, "incidents": inc}
+    dog.addlog(f"⬆ {point} 相机帧 → 就近 {r.get('matchedPoint')}{' · 突发✓ ' + ','.join(inc) if inc else ''}")
+    return {"ok": True, "matchedPoint": r.get("matchedPoint"), "incidents": inc}
 
 
 @app.get("/api/pcd")

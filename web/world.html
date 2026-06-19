@@ -139,12 +139,13 @@ function buildMap(){
 function label(txt,x,y){const c=document.createElement('canvas');c.width=256;c.height=64;const g=c.getContext('2d');g.fillStyle='#cbd5e1';g.font='28px sans-serif';g.textAlign='center';g.fillText(txt,128,40);
   const t=new THREE.CanvasTexture(c);const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:t,depthTest:false}));sp.position.set(x,1,y);sp.scale.set(PT.span*0.13,PT.span*0.033,1);return sp;}
 function renderPropMarkers(){markers.forEach(m=>mapScene.remove(m));markers=[];
-  PROPS.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(.7,12,12),mat(PROP_ICON[p.type]||0xffffff,PROP_ICON[p.type]));m.position.set(p.x,.8,p.y);m.userData=p;mapScene.add(m);markers.push(m);});}
+  PROPS.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(.7,12,12),mat(PROP_ICON[p.type]||0xffffff,PROP_ICON[p.type]));m.position.set(p.x,.8,p.y);m.userData=p;mapScene.add(m);markers.push(m);});
+  buildCamScene();}                                          // 物件变了→重建狗相机场景
 function animate(){requestAnimationFrame(animate);if(!mapScene)return;if(dogMark){dogMark.position.set(dog.x,.6,dog.y);dogMark.rotation.z=-dog.yaw;}if(dogLabel)dogLabel.position.set(dog.x,2.6,dog.y);
   let cam=mapCam;
   if(view==='pano'&&orbitCam){const cx=PT.cx,cy=PT.cy,r=orbit.dist,e=orbit.el;
     orbitCam.position.set(cx+r*Math.cos(e)*Math.sin(orbit.az),r*Math.sin(e)+3,cy+r*Math.cos(e)*Math.cos(orbit.az));orbitCam.up.set(0,1,0);orbitCam.lookAt(cx,1,cy);cam=orbitCam;}
-  mapR.render(mapScene,cam);}
+  mapR.render(mapScene,cam);renderCam();}
 animate();
 
 // 全景轨道控制 + 切换
@@ -166,14 +167,35 @@ $('map').addEventListener('click',e=>{if(!mapCam||view!=='top')return;const r=$(
 window.pickProp=(t,btn)=>{pick=t;document.querySelectorAll('.pal button').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');};
 window.clearProps=()=>{PROPS=[];renderPropMarkers();saveWorld();L('清空物件');};
 
-// ---------- dog camera (offscreen render → png) ----------
+// ---------- 狗相机:连续向前渲染(像真摄像头)→ 录成会动的视频段 ----------
 const camR=new THREE.WebGLRenderer({canvas:$('cam'),antialias:true,preserveDrawingBuffer:true});
 camR.setSize(384,288,false);
-function snapFrame(tx,ty){const s=envScene();PROPS.forEach(p=>{const m=propMesh(p.type);m.position.set(p.x,0,p.y);s.add(m);});
-  const cam=new THREE.PerspectiveCamera(62,384/288,.05,200);
-  const dx=tx-dog.x,dy=ty-dog.y,d=Math.hypot(dx,dy)||1;
-  cam.position.set(dog.x,1.4,dog.y);cam.lookAt(tx,.35,ty);
-  camR.render(s,cam);return $('cam').toDataURL('image/png');}
+const camView=new THREE.PerspectiveCamera(72,384/288,.05,300);
+let camScene=null;
+function buildCamScene(){camScene=envScene();PROPS.forEach(p=>{const m=propMesh(p.type);m.position.set(p.x,0,p.y);camScene.add(m);});}
+function renderCam(){if(!camScene)return;const fx=dog.x+Math.cos(dog.yaw)*5,fz=dog.y+Math.sin(dog.yaw)*5;
+  camView.position.set(dog.x,1.1,dog.y);camView.lookAt(fx,.3,fz);camR.render(camScene,camView);}
+
+// 录像:走起来就连续录,每 SEG 秒发一段会动的 webm(像真狗的 20s 段)
+let recorder=null, recChunks=[], recTimer=null; const SEG=10;
+function startRec(){
+  if(!dog.connected||!$('cam').captureStream)return;
+  try{
+    const stream=$('cam').captureStream(15); recChunks=[];
+    let mime='video/webm'; if(window.MediaRecorder&&!MediaRecorder.isTypeSupported(mime))mime='';
+    recorder=new MediaRecorder(stream, mime?{mimeType:mime}:undefined);
+    recorder.ondataavailable=e=>{if(e.data&&e.data.size)recChunks.push(e.data);};
+    recorder.onstop=async()=>{const blob=new Blob(recChunks,{type:'video/webm'});if(blob.size>2000)await uploadClip(blob);if(dog.running)startRec();};
+    recorder.start();
+    recTimer=setTimeout(()=>{if(recorder&&recorder.state!=='inactive')recorder.stop();},SEG*1000);
+  }catch(e){L('!! 录制失败 '+(e.message||e));}}
+function stopRec(){if(recTimer)clearTimeout(recTimer);recTimer=null;if(recorder&&recorder.state!=='inactive')recorder.stop();}
+async function uploadClip(blob){
+  const b64=await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(blob);});
+  $('caminfo').textContent='传一段视频…';
+  const r=await J('/api/snap',{video:b64,segmentSeconds:SEG});
+  $('caminfo').textContent='平台:'+(r.matchedPoint||'—')+(r.incidents&&r.incidents.length?' · 突发'+r.incidents.join(','):'');
+  L('🎥 发一段 '+SEG+'s 会动视频 → 平台 就近='+(r.matchedPoint||'—')+(r.incidents&&r.incidents.length?(' · 突发✓ '+r.incidents.join(',')):''));}
 
 // ---------- network ----------
 const J=(u,b)=>fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());
@@ -202,35 +224,23 @@ window.connect=async()=>{$('err').textContent='';
   try{const w=await fetch('/api/world').then(r=>r.json());PROPS=(w.props||[]).map(p=>({id:seq++,...p}));}catch(e){}
   buildMap();$('dot').classList.add('on');$('conn').textContent=plan.robotId+' · '+POINTS.length+'点位';L('已连接 · '+POINTS.length+' 点位 —— 现在扔个事故,再点开始巡检');};
 
-window.startWalk=()=>{if(!dog.connected){L('先连接');return;}dog.running=true;dog.paused=false;lastSnapKey='';L('▶ 开始巡检');};
+window.startWalk=()=>{if(!dog.connected){L('先连接');return;}dog.running=true;dog.paused=false;startRec();L('▶ 开始巡检(开始连续录像,每'+SEG+'s 发一段)');};
 window.togglePause=()=>{if(dog.running)dog.paused=!dog.paused;L(dog.paused?'⏸ 暂停':'▶ 继续');};
-window.stopWalk=()=>{dog.running=false;J('/api/heartbeat',{x:POINTS[0]?.x||0,y:POINTS[0]?.y||0,status:'idle'});L('⏹ 回待命');};
+window.stopWalk=()=>{dog.running=false;stopRec();J('/api/heartbeat',{x:POINTS[0]?.x||0,y:POINTS[0]?.y||0,status:'idle'});L('⏹ 回待命');};
 
 // ---------- sim loop ----------
-let lastHb=0, capturing=false;
-async function captureAt(tx,ty,label){const key=label+'@'+dog.seg;if(key===lastSnapKey||capturing)return;lastSnapKey=key;capturing=true;
-  try{
-    const png=snapFrame(tx,ty);$('caminfo').textContent='拍：'+label+' …';
-    const r=await J('/api/snap',{point:label,png,x:dog.x,y:dog.y,yaw:dog.yaw,speed:dog.speed});
-    $('caminfo').textContent=label+' → 平台:'+(r.matchedPoint||'—')+(r.incidents&&r.incidents.length?' · 突发'+r.incidents.join(','):'');
-    L('🎥 '+label+' → 平台判 就近='+(r.matchedPoint||'—')+(r.incidents&&r.incidents.length?(' · 突发✓ '+r.incidents.join(',')):''));
-  }catch(e){L('!! 拍摄失败 '+(e&&e.message||e));}
-  finally{capturing=false;}}
-
-setInterval(async()=>{
+let lastHb=0;
+setInterval(()=>{
   if(!dog.connected)return;
   $('status').innerHTML=`${dog.running?(dog.paused?'⏸ 暂停':'● 巡检中'):'○ 待命'} · 位置(${dog.x.toFixed(1)}, ${dog.y.toFixed(1)}) · 速度 ${dog.speed}`;
   if(!dog.running||dog.paused)return;
-  // 沿环形路线推进(先更新 seg/segT，再据此算位置，避免越界回跳)
+  // 沿环形路线推进(本地平滑走;位姿只每 5 秒报一个点 → 像真狗)
   let A=POINTS[ROUTE[dog.seg]],B=POINTS[ROUTE[(dog.seg+1)%ROUTE.length]];
   const segLen=Math.hypot(B.x-A.x,B.y-A.y)||1;
   dog.segT+=dog.speed*0.5/segLen;
   if(dog.segT>=1){dog.segT-=1;dog.seg=(dog.seg+1)%ROUTE.length;A=POINTS[ROUTE[dog.seg]];B=POINTS[ROUTE[(dog.seg+1)%ROUTE.length]];}
   dog.x=A.x+(B.x-A.x)*dog.segT;dog.y=A.y+(B.y-A.y)*dog.segT;dog.yaw=Math.atan2(B.y-A.y,B.x-A.x);
-  if(Date.now()-lastHb>650){lastHb=Date.now();J('/api/heartbeat',{x:dog.x,y:dog.y,yaw:dog.yaw,speed:dog.speed,status:'patrolling'});}
-  // 拍摄：靠近当前目标点 → 拍点位；靠近路上的突发物件 → 拍它
-  if(Math.hypot(B.x-dog.x,B.y-dog.y)<CAPTURE_DIST) await captureAt(B.x,B.y,B.name);
-  for(const p of PROPS){if(INCIDENT.has(p.type)&&Math.hypot(p.x-dog.x,p.y-dog.y)<PROP_DIST) await captureAt(p.x,p.y,'路上·'+p.type);}
+  if(Date.now()-lastHb>5000){lastHb=Date.now();J('/api/heartbeat',{x:dog.x,y:dog.y,yaw:dog.yaw,speed:dog.speed,status:'patrolling'});}
 },140);
 
 $('backend').value='http://localhost:8000';
