@@ -326,6 +326,29 @@ def api_snap(body: dict = Body(...)):
     return {"ok": True, "matchedPoint": matched, "incidents": inc}
 
 
+@app.get("/api/pcd")
+def api_pcd():
+    """从平台拉真实点云(给犬境里"看真实3D"用)。点云接口要用户登录态 → 狗用平台账号登一下
+    (DOG_PLATFORM_USER/PASS,默认 admin/0019,本地方便;生产改 env)。"""
+    if not dog.connected:
+        return {"hasPcd": False, "error": "未连接"}
+    try:
+        u = os.getenv("DOG_PLATFORM_USER", "admin")
+        p = os.getenv("DOG_PLATFORM_PASS", "0019")
+        lr = HTTP.post(f"{dog.backend}/auth/login", json={"username": u, "password": p}, timeout=15)
+        tok = lr.json().get("token") if lr.status_code == 200 else None
+        if not tok:
+            return {"hasPcd": False, "error": "平台登录失败(账号见 DOG_PLATFORM_USER/PASS)"}
+        h = {"Authorization": f"Bearer {tok}"}
+        info = HTTP.get(f"{dog.backend}/map3d", headers=h, timeout=20).json()
+        if not info.get("hasPcd"):
+            return {"hasPcd": False}
+        pcd = HTTP.get(f"{dog.backend}{info['pcdUrl']}", headers=h, timeout=60).json()
+        return {"hasPcd": True, "b64": pcd["b64"], "meta": pcd["meta"], "site": info.get("site")}
+    except Exception as e:
+        return {"hasPcd": False, "error": str(e)}
+
+
 @app.get("/api/world")
 def api_world_get():
     if WORLD_FILE.exists():

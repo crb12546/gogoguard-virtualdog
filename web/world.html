@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>🐕 虚拟狗 · 世界编辑器</title>
+<title>🐕 犬境 · 虚拟狗世界</title>
 <style>
   :root{--bg:#0d1117;--card:#161b22;--line:#283039;--txt:#e6edf3;--mut:#8b949e;--grn:#2ea043;--red:#da3633;--blu:#1f6feb;--amb:#d29922}
   *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,"PingFang SC",Segoe UI,sans-serif}
@@ -23,7 +23,7 @@
   .err{color:#ff7b72;font-size:12px}.muted{color:var(--mut);font-size:12px}
 </style></head>
 <body><div class="wrap">
-  <h1>🐕 虚拟狗 · 世界编辑器 <span id="dot" class="dot"></span> <span id="conn" class="muted">未连接</span></h1>
+  <h1>🐕 犬境 <span class="muted" style="font-size:13px;font-weight:400">· 虚拟狗世界</span> <span id="dot" class="dot"></span> <span id="conn" class="muted">未连接</span></h1>
 
   <div class="card"><div class="row">
     <label>平台</label><input id="backend" style="flex:1;min-width:180px" placeholder="http://localhost:8000">
@@ -31,7 +31,9 @@
     <label>令牌</label><input id="token" type="password" style="width:150px" placeholder="dev-...">
     <button class="primary" onclick="connect()">连接</button>
     <span id="err" class="err"></span>
-  </div></div>
+  </div>
+  <div class="muted" style="margin-top:7px">🔧 点位/路线在 <b style="color:#8b949e">GoGoGuard 平台</b>配置(犬境只拉取);犬境负责 <b style="color:#cbd5e1">操控狗 · 摆模拟物(人/火/隐患) · 看真实世界(PCD)</b> —— 一开动,平台就当真狗收数据。</div>
+  </div>
 
   <div class="main">
     <div class="card">
@@ -40,6 +42,7 @@
         <button onclick="togglePause()">⏸ 暂停/继续</button>
         <button onclick="stopWalk()">⏹ 回待命</button>
         <button id="viewBtn" onclick="toggleView()">🌐 全景</button>
+        <button id="pcdBtn" onclick="togglePcd()">🗺️ 真实点云</button>
         <label>速度</label><input id="speed" type="range" min="0.3" max="2.5" step="0.1" value="0.9" style="width:110px" oninput="dog.speed=+this.value">
         <span class="muted" id="viewhint">俯视：点地图摆物；全景：拖动转视角</span>
       </div>
@@ -78,7 +81,7 @@ const log=[]; function L(m){log.unshift(new Date().toLocaleTimeString()+'  '+m);
 
 let POINTS=[], ROUTE=[], PROPS=[], seq=1, pick=null, lastSnapKey='';
 const dog={x:0,y:0,yaw:0,seg:0,segT:0,running:false,paused:false,speed:0.9,robotId:'',connected:false};
-let view='top', orbitCam=null, dragging=false, lastM={x:0,y:0}; const orbit={az:0.8,el:0.85,dist:60};
+let view='top', orbitCam=null, dragging=false, lastM={x:0,y:0}, pcdPts=null; const orbit={az:0.8,el:0.85,dist:60};
 const CAPTURE_DIST=3.4, PROP_DIST=3.0, PT={};
 
 // ---------- prop meshes (与 render.html 同款图元低模) ----------
@@ -173,13 +176,29 @@ function snapFrame(tx,ty){const s=envScene();PROPS.forEach(p=>{const m=propMesh(
 // ---------- network ----------
 const J=(u,b)=>fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());
 async function saveWorld(){try{await J('/api/world',{props:PROPS});}catch(e){}}
+
+// 真实点云(PCD)→ 偏移到真实帧(与点位对齐:+cx,+zmin,+cy)→ 叠进犬境
+async function loadPcd(){
+  try{const d=await fetch('/api/pcd').then(r=>r.json());
+    if(!d.hasPcd){L('该项目无点云'+(d.error?'('+d.error+')':''));return;}
+    const m=d.meta, bin=atob(d.b64), u8=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
+    const pos=new Float32Array(u8.buffer), n=pos.length/3, arr=new Float32Array(pos.length), col=new Float32Array(pos.length);
+    const dz=(m.zmax-m.zmin)||1;
+    for(let i=0;i<n;i++){const X=pos[i*3]+m.cx,Y=pos[i*3+1]+m.zmin,Z=pos[i*3+2]+m.cy;arr[i*3]=X;arr[i*3+1]=Y;arr[i*3+2]=Z;
+      const t=Math.max(0,Math.min(1,(pos[i*3+1])/dz));col[i*3]=.15+.7*t;col[i*3+1]=.45+.3*t;col[i*3+2]=1-.6*t;}
+    const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(arr,3));g.setAttribute('color',new THREE.BufferAttribute(col,3));
+    if(pcdPts){mapScene.remove(pcdPts);}pcdPts=new THREE.Points(g,new THREE.PointsMaterial({size:.5,vertexColors:true,sizeAttenuation:true}));mapScene.add(pcdPts);
+    orbit.dist=Math.max(orbit.dist,(m.radius||PT.span)*1.4);
+    L('🗺️ 载入真实点云 '+n.toLocaleString()+' 点'+(d.site?' · '+d.site:''));
+  }catch(e){L('!! 点云载入失败 '+(e&&e.message||e));}}
+window.togglePcd=()=>{if(!pcdPts){loadPcd();return;}pcdPts.visible=!pcdPts.visible;L(pcdPts.visible?'显示点云':'隐藏点云');};
 window.connect=async()=>{$('err').textContent='';
   const r=await J('/api/connect',{backend:$('backend').value,robotId:$('robotId').value,token:$('token').value});
   if(!r.ok){$('err').textContent=r.error||'连接失败';return;}
   const plan=await fetch('/api/plan').then(r=>r.json());POINTS=plan.points;ROUTE=POINTS.map((_,i)=>i);dog.robotId=plan.robotId;dog.connected=true;
   dog.x=POINTS[0].x;dog.y=POINTS[0].y;dog.seg=0;dog.segT=0;
   try{const w=await fetch('/api/world').then(r=>r.json());PROPS=(w.props||[]).map(p=>({id:seq++,...p}));}catch(e){}
-  buildMap();$('dot').classList.add('on');$('conn').textContent=plan.robotId+' · '+POINTS.length+'点位';L('已连接 · '+POINTS.length+' 点位');};
+  buildMap();$('dot').classList.add('on');$('conn').textContent=plan.robotId+' · '+POINTS.length+'点位';L('已连接 · '+POINTS.length+' 点位');loadPcd();};
 
 window.startWalk=()=>{if(!dog.connected){L('先连接');return;}dog.running=true;dog.paused=false;lastSnapKey='';L('▶ 开始巡检');};
 window.togglePause=()=>{if(dog.running)dog.paused=!dog.paused;L(dog.paused?'⏸ 暂停':'▶ 继续');};
