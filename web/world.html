@@ -32,7 +32,8 @@
     <button class="primary" onclick="connect()">连接</button>
     <span id="err" class="err"></span>
   </div>
-  <div class="muted" style="margin-top:7px">🔧 点位/路线在 <b style="color:#8b949e">GoGoGuard 平台</b>配置(犬境只拉取);犬境负责 <b style="color:#cbd5e1">操控狗 · 摆模拟物(人/火/隐患) · 看真实世界(PCD)</b> —— 一开动,平台就当真狗收数据。</div>
+  <div style="margin-top:8px;font-size:13.5px;color:#cbd5e1">🐕 <b>这是一只你用鼠标遥控的"假狗"</b>,代替还没造好的真狗,用来测试/演示 GoGoGuard 平台。</div>
+  <div class="muted" style="margin-top:4px">三步:<b style="color:#3fb950">①</b> 填令牌→点连接　<b style="color:#3fb950">②</b> 点下面「🆘人倒地」,再点地图把它扔下去　<b style="color:#3fb950">③</b> 点「▶开始巡检」→ 看右边日志,你的平台大屏会弹告警</div>
   </div>
 
   <div class="main">
@@ -42,13 +43,13 @@
         <button onclick="togglePause()">⏸ 暂停/继续</button>
         <button onclick="stopWalk()">⏹ 回待命</button>
         <button id="viewBtn" onclick="toggleView()">🌐 全景</button>
-        <button id="pcdBtn" onclick="togglePcd()">🗺️ 真实点云</button>
+        <button id="pcdBtn" onclick="togglePcd()">🗺️ 看真实楼(可选)</button>
         <label>速度</label><input id="speed" type="range" min="0.3" max="2.5" step="0.1" value="0.9" style="width:110px" oninput="dog.speed=+this.value">
         <span class="muted" id="viewhint">俯视：点地图摆物；全景：拖动转视角</span>
       </div>
       <canvas id="map"></canvas>
       <div class="pal row" style="margin-top:8px">
-        <span class="muted">调色板:</span>
+        <span class="muted">扔个假事故 →</span>
         <button data-t="person_down" class="warn" onclick="pickProp('person_down',this)">🆘 人倒地</button>
         <button data-t="fire" class="warn" onclick="pickProp('fire',this)">🔥 起火</button>
         <button data-t="flooding" class="warn" onclick="pickProp('flooding',this)">🌊 积水</button>
@@ -60,9 +61,9 @@
 
     <div>
       <div class="card">
-        <p class="sec">🎥 狗相机(实时渲染 → 喂平台判定)</p>
+        <p class="sec">🎥 假狗镜头 → 发给平台判</p>
         <canvas id="cam"></canvas>
-        <p class="muted" id="caminfo">连接后开始巡检</p>
+        <p class="muted" id="caminfo">假狗走到事故旁边,这里就出现它看到的画面</p>
       </div>
       <div class="card">
         <p class="sec">状态</p>
@@ -111,7 +112,7 @@ function envScene(){const s=new THREE.Scene();s.background=new THREE.Color(0xaeb
 
 // ---------- map (top-down) ----------
 const mapR=new THREE.WebGLRenderer({canvas:$('map'),antialias:true});
-let mapScene,mapCam,dogMark,markers=[];
+let mapScene,mapCam,dogMark,dogLabel,markers=[];
 function buildMap(){
   mapScene=new THREE.Scene();mapScene.background=new THREE.Color(0x0a0d11);
   mapScene.add(new THREE.AmbientLight(0xffffff,.9));const d=new THREE.DirectionalLight(0xffffff,.5);d.position.set(0,10,2);mapScene.add(d);
@@ -132,13 +133,14 @@ function buildMap(){
   POINTS.forEach(p=>{const m=new THREE.Mesh(new THREE.CylinderGeometry(.6,.6,.2,16),mat(0x5a6675));m.position.set(p.x,.1,p.y);mapScene.add(m);mapScene.add(label(p.name,p.x,p.y+ (PT.span*0.018)));});
   // dog
   dogMark=new THREE.Mesh(new THREE.ConeGeometry(.9,1.8,4),mat(0x32d36b,0x0a3a18));dogMark.rotation.x=Math.PI/2;dogMark.position.set(dog.x,.6,dog.y);mapScene.add(dogMark);
+  dogLabel=label('🐕 假狗',dog.x,dog.y);
   markers=[];renderPropMarkers();
 }
 function label(txt,x,y){const c=document.createElement('canvas');c.width=256;c.height=64;const g=c.getContext('2d');g.fillStyle='#cbd5e1';g.font='28px sans-serif';g.textAlign='center';g.fillText(txt,128,40);
   const t=new THREE.CanvasTexture(c);const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:t,depthTest:false}));sp.position.set(x,1,y);sp.scale.set(PT.span*0.13,PT.span*0.033,1);return sp;}
 function renderPropMarkers(){markers.forEach(m=>mapScene.remove(m));markers=[];
   PROPS.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(.7,12,12),mat(PROP_ICON[p.type]||0xffffff,PROP_ICON[p.type]));m.position.set(p.x,.8,p.y);m.userData=p;mapScene.add(m);markers.push(m);});}
-function animate(){requestAnimationFrame(animate);if(!mapScene)return;if(dogMark){dogMark.position.set(dog.x,.6,dog.y);dogMark.rotation.z=-dog.yaw;}
+function animate(){requestAnimationFrame(animate);if(!mapScene)return;if(dogMark){dogMark.position.set(dog.x,.6,dog.y);dogMark.rotation.z=-dog.yaw;}if(dogLabel)dogLabel.position.set(dog.x,2.6,dog.y);
   let cam=mapCam;
   if(view==='pano'&&orbitCam){const cx=PT.cx,cy=PT.cy,r=orbit.dist,e=orbit.el;
     orbitCam.position.set(cx+r*Math.cos(e)*Math.sin(orbit.az),r*Math.sin(e)+3,cy+r*Math.cos(e)*Math.cos(orbit.az));orbitCam.up.set(0,1,0);orbitCam.lookAt(cx,1,cy);cam=orbitCam;}
@@ -198,7 +200,7 @@ window.connect=async()=>{$('err').textContent='';
   const plan=await fetch('/api/plan').then(r=>r.json());POINTS=plan.points;ROUTE=POINTS.map((_,i)=>i);dog.robotId=plan.robotId;dog.connected=true;
   dog.x=POINTS[0].x;dog.y=POINTS[0].y;dog.seg=0;dog.segT=0;
   try{const w=await fetch('/api/world').then(r=>r.json());PROPS=(w.props||[]).map(p=>({id:seq++,...p}));}catch(e){}
-  buildMap();$('dot').classList.add('on');$('conn').textContent=plan.robotId+' · '+POINTS.length+'点位';L('已连接 · '+POINTS.length+' 点位');loadPcd();};
+  buildMap();$('dot').classList.add('on');$('conn').textContent=plan.robotId+' · '+POINTS.length+'点位';L('已连接 · '+POINTS.length+' 点位 —— 现在扔个事故,再点开始巡检');};
 
 window.startWalk=()=>{if(!dog.connected){L('先连接');return;}dog.running=true;dog.paused=false;lastSnapKey='';L('▶ 开始巡检');};
 window.togglePause=()=>{if(dog.running)dog.paused=!dog.paused;L(dog.paused?'⏸ 暂停':'▶ 继续');};
