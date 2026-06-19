@@ -1,0 +1,14 @@
+# 密钥（绝不入库）
+.env
+*.local
+
+# 生成/缓存的素材（可重新生成，不入库）
+sim_library/
+sim_video_library/
+.ai_cache.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
